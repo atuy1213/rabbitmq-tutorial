@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/atuy1213/rabbitmq-tutorial/pkg/repository"
 	rabbitmq "github.com/rabbitmq/amqp091-go"
 )
 
@@ -42,20 +43,43 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	body := "Hello World"
-	if err := channel.PublishWithContext(
-		ctx,
-		"",
-		queue.Name,
-		false,
-		false,
-		rabbitmq.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(body),
-		},
-	); err != nil {
-		log.Fatal(err, "Failed to publish messaige")
+	repository := repository.NewRepository()
+	tasks := repository.GetTasks()
+
+	if err := channel.Tx(); err != nil {
+		log.Fatal(err, "Failed to start transaction")
 	}
 
-	log.Printf("[x] Sent %s\n", body)
+	for _, v := range tasks {
+
+		if err := v.DoSomething(); err != nil {
+			if err := channel.TxRollback(); err != nil {
+				log.Fatal(err, "Failed to rollback transaction")
+			}
+			log.Fatal(err, "Failed to do something")
+		}
+
+		if err := channel.PublishWithContext(
+			ctx,
+			"",
+			queue.Name,
+			false,
+			false,
+			rabbitmq.Publishing{
+				ContentType: "text/plain",
+				Body:        []byte(v.Name),
+			},
+		); err != nil {
+			if err := channel.TxRollback(); err != nil {
+				log.Fatal(err, "Failed to rollback transaction")
+			}
+			log.Fatal(err, "Failed to publish messaige")
+		}
+
+		log.Printf("[x] Sending %s\n", v.Name)
+	}
+
+	if err := channel.TxCommit(); err != nil {
+		log.Fatal(err, "Failed to commit transaction")
+	}
 }
